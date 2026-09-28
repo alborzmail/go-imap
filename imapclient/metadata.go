@@ -53,7 +53,6 @@ func (options *GetMetadataOptions) names() []string {
 func (c *Client) GetMetadata(mailbox string, entries []string, options *GetMetadataOptions) *GetMetadataCommand {
 	cmd := &GetMetadataCommand{mailbox: mailbox}
 	enc := c.beginCommand("GETMETADATA", cmd)
-	enc.SP().Mailbox(mailbox)
 	if opts := options.names(); len(opts) > 0 {
 		enc.SP().List(len(opts), func(i int) {
 			opt := opts[i]
@@ -68,6 +67,7 @@ func (c *Client) GetMetadata(mailbox string, entries []string, options *GetMetad
 			}
 		})
 	}
+	enc.SP().Mailbox(mailbox)
 	enc.SP().List(len(entries), func(i int) {
 		enc.String(entries[i])
 	})
