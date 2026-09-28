@@ -1,10 +1,12 @@
 package imapclient_test
 
 import (
+	"bytes"
 	"crypto/tls"
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -218,6 +220,42 @@ func TestLogin(t *testing.T) {
 	if err := client.Login(testUsername, testPassword).Wait(); err != nil {
 		t.Errorf("Login().Wait() = %v", err)
 	}
+}
+
+func TestLogin_debugRedacted(t *testing.T) {
+	conn, server := newMemClientServerPair(t)
+	defer server.Close()
+
+	var debug lockedBuffer
+	client := imapclient.New(conn, &imapclient.Options{DebugWriter: &debug})
+	defer client.Close()
+
+	if err := client.Login(testUsername, testPassword).Wait(); err != nil {
+		t.Fatalf("Login().Wait() = %v", err)
+	}
+
+	trace := debug.String()
+	if !strings.Contains(trace, "<redacted>") || strings.Contains(trace, testPassword) {
+		t.Errorf("debug output does not redact the password:\n%v", trace)
+	}
+}
+
+// lockedBuffer is a bytes.Buffer which can be written from several goroutines.
+type lockedBuffer struct {
+	buf   bytes.Buffer
+	mutex sync.Mutex
+}
+
+func (lb *lockedBuffer) Write(b []byte) (int, error) {
+	lb.mutex.Lock()
+	defer lb.mutex.Unlock()
+	return lb.buf.Write(b)
+}
+
+func (lb *lockedBuffer) String() string {
+	lb.mutex.Lock()
+	defer lb.mutex.Unlock()
+	return lb.buf.String()
 }
 
 func TestLogout(t *testing.T) {

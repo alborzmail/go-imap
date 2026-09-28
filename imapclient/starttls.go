@@ -55,7 +55,7 @@ func (c *Client) upgradeStartTLS(startTLS *startTLSCommand) {
 	}
 
 	tlsConn := tls.Client(cleartextConn, startTLS.tlsConfig)
-	rw := c.options.wrapReadWriter(tlsConn)
+	rw := c.options.wrapReadWriter(tlsConn, c.debug)
 
 	c.br.Reset(rw)
 	// Unfortunately we can't re-use the bufio.Writer here, it races with

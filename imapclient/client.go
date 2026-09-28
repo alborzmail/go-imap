@@ -68,8 +68,8 @@ type Options struct {
 	// default configuration is used.
 	TLSConfig *tls.Config
 	// Raw ingress and egress data will be written to this writer, if any.
-	// Note, this may include sensitive information such as credentials used
-	// during authentication.
+	// The credentials sent by Login and Authenticate are replaced with a
+	// placeholder. Other data may still be sensitive.
 	DebugWriter io.Writer
 	// Unilateral data handler.
 	UnilateralDataHandler *UnilateralDataHandler
@@ -80,8 +80,8 @@ type Options struct {
 	Dialer *net.Dialer
 }
 
-func (options *Options) wrapReadWriter(rw io.ReadWriter) io.ReadWriter {
-	if options.DebugWriter == nil {
+func (options *Options) wrapReadWriter(rw io.ReadWriter, debug *debugWriter) io.ReadWriter {
+	if debug == nil {
 		return rw
 	}
 	return struct {
@@ -89,8 +89,28 @@ func (options *Options) wrapReadWriter(rw io.ReadWriter) io.ReadWriter {
 		io.Writer
 	}{
 		Reader: io.TeeReader(rw, options.DebugWriter),
-		Writer: io.MultiWriter(rw, options.DebugWriter),
+		Writer: io.MultiWriter(rw, debug),
 	}
+}
+
+// redacted stands in for credentials in the output of Options.DebugWriter.
+const redacted = "<redacted>"
+
+// debugWriter copies egress data to Options.DebugWriter, with redacted in
+// place of whatever is written while redact is set.
+type debugWriter struct {
+	w      io.Writer
+	redact bool
+}
+
+func (dw *debugWriter) Write(p []byte) (int, error) {
+	if dw.redact {
+		if _, err := io.WriteString(dw.w, redacted); err != nil {
+			return 0, err
+		}
+		return len(p), nil
+	}
+	return dw.w.Write(p)
 }
 
 func (options *Options) decodeText(s string) (string, error) {
@@ -144,6 +164,7 @@ type Client struct {
 	options  Options
 	br       *bufio.Reader
 	bw       *bufio.Writer
+	debug    *debugWriter
 	dec      *imapwire.Decoder
 	encMutex sync.Mutex
 
@@ -176,7 +197,11 @@ func New(conn net.Conn, options *Options) *Client {
 		options = &Options{}
 	}
 
-	rw := options.wrapReadWriter(conn)
+	var debug *debugWriter
+	if options.DebugWriter != nil {
+		debug = &debugWriter{w: options.DebugWriter}
+	}
+	rw := options.wrapReadWriter(conn, debug)
 	br := bufio.NewReader(rw)
 	bw := bufio.NewWriter(rw)
 
@@ -185,6 +210,7 @@ func New(conn net.Conn, options *Options) *Client {
 		options:    *options,
 		br:         br,
 		bw:         bw,
+		debug:      debug,
 		dec:        imapwire.NewDecoder(br, imapwire.ConnSideClient),
 		greetingCh: make(chan struct{}),
 		decCh:      make(chan struct{}),
@@ -415,6 +441,22 @@ func (c *Client) Close() error {
 		return net.ErrClosed
 	}
 	return nil
+}
+
+// redact runs write with the debug copy of its output redacted. The buffered
+// writer is flushed on both sides, so exactly what write wrote is redacted.
+// The caller must hold the encoder lock.
+func (c *Client) redact(write func()) {
+	if c.debug == nil {
+		write()
+		return
+	}
+	// A failed flush sticks to the writer and surfaces when the command ends.
+	c.bw.Flush()
+	c.debug.redact = true
+	write()
+	c.bw.Flush()
+	c.debug.redact = false
 }
 
 // beginCommand starts sending a command to the server.
@@ -1059,7 +1101,8 @@ func (c *Client) Logout() *Command {
 func (c *Client) Login(username, password string) *Command {
 	cmd := &loginCommand{}
 	enc := c.beginCommand("LOGIN", cmd)
-	enc.SP().String(username).SP().String(password)
+	enc.SP().String(username).SP()
+	c.redact(func() { enc.String(password) })
 	enc.end()
 	return &cmd.Command
 }

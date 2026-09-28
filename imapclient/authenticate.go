@@ -29,7 +29,8 @@ func (c *Client) Authenticate(saslClient sasl.Client) error {
 	enc := c.beginCommand("AUTHENTICATE", cmd)
 	enc.SP().Atom(mech)
 	if initialResp != nil && hasSASLIR {
-		enc.SP().Atom(internal.EncodeSASL(initialResp))
+		enc.SP()
+		c.redact(func() { enc.Atom(internal.EncodeSASL(initialResp)) })
 		initialResp = nil
 	}
 	enc.flush()
@@ -76,8 +77,8 @@ type authenticateCommand struct {
 }
 
 func (c *Client) writeSASLResp(resp []byte) error {
-	respStr := internal.EncodeSASL(resp)
-	if _, err := c.bw.WriteString(respStr + "\r\n"); err != nil {
+	c.redact(func() { c.bw.WriteString(internal.EncodeSASL(resp)) })
+	if _, err := c.bw.WriteString("\r\n"); err != nil {
 		return err
 	}
 	if err := c.bw.Flush(); err != nil {
